@@ -219,6 +219,27 @@ export const register: Register = on => {
     )
   })
 
+  // /concurrency-report's row draws the summary cards in place of its text line; the model still reads the text.
+  on('ui.render', { component: 'CommandOutput', props: { command: 'concurrency-report' } }, async ($, e, next) => {
+    if (e.props.isErrored) return next(e)
+    const map = await read($, byFile)
+    if (!Object.keys(map).length) return next(e)
+
+    const { Box, Link, Text } = $.ui.resolve(e)
+    const url = e.props.text.match(/file:\/\/\S+/)?.[0]
+    return (
+      <Box flexDirection="column">
+        {summaryCards({ Box, Text }, map)}
+        {url ? (
+          <Text>
+            <Link href={url}>Open full report ↗</Link>
+            <Text dimColor> {REPORT_PATH}</Text>
+          </Text>
+        ) : null}
+      </Box>
+    )
+  })
+
   // The inline view of the findings, drawn above the prompt the way /enhance draws its result.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || e.props.isWorking) return next(e)
