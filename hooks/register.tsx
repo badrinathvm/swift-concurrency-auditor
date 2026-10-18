@@ -6,6 +6,8 @@ import { audit, counts, fingerprint, reminder } from './rules'
 import { buildReport, readiness } from './report'
 
 const PANE = 'swift-concurrency'
+// Escape closes the pane, from a focused Fix button or an idle prompt; running fixes carry on, their state is in $.state.
+const PANE_OPEN = { id: PANE, title: 'Swift concurrency', closeOnEscape: true } as const
 const REPORT_PATH = '.concurrency-audit/report.html'
 const byFile = atom({ plugin: 'swift-concurrency-auditor', key: 'byFile' } as const, {})
 const band = atom({ plugin: 'swift-concurrency-auditor', key: 'band' } as const, { status: 'hidden' } as Band)
@@ -285,7 +287,7 @@ export const register: Register = on => {
 
   on('command.run', { command: 'concurrency' }, async $ => {
     const map = await read($, byFile)
-    const { isPlaced } = await $.ui.open({ id: PANE, title: 'Swift concurrency' })
+    const { isPlaced } = await $.ui.open(PANE_OPEN)
     if (isPlaced) return {}
     // No surface to draw the pane on: print a summary instead.
     const all = Object.values(map).flat()
@@ -403,7 +405,7 @@ export const register: Register = on => {
               <Text dimColor> {state.reportPath}</Text>
             </Text>
           ) : null}
-          <Button key="pane" label="Open pane" onPress={() => $.ui.open({ id: PANE, title: 'Swift concurrency' })} />
+          <Button key="pane" label="Open pane" onPress={() => $.ui.open(PANE_OPEN)} />
           <Button key="dismiss" label="Dismiss" onPress={dismiss} />
         </Box>
       </Box>
