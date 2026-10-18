@@ -41,7 +41,7 @@ To see every rule fire, run `/concurrency-audit tests/fixtures/ConcurrencyIssues
 
 ## Commands
 
-- `/concurrency` — live pane of findings for every Swift file touched this session
+- `/concurrency` — live pane of findings for every Swift file touched this session. Each finding has a **Fix** button that starts a background agent (`swift-concurrency-auditor:fixer`, with the swift-concurrency skill preloaded) to fix that one finding. The agent can only read and edit files, so it never commits or pushes. The button reads **Fixing…** while the agent works and **Retry** if it fails. A fix counts as done only when re-auditing the file shows the finding gone. Finished runs are listed under **Fix runs**. One fix runs per file at a time; other buttons on that file show **Wait** meanwhile. Esc closes the pane; fixes already running carry on in the background.
 - `/concurrency-report` — writes `.concurrency-audit/report.html`, the full HTML dashboard, and shows a visual summary in a band above the prompt: a Swift 6 readiness card beside Critical / High / Medium / Low tiles, one compact row per finding, an **Open full report ↗** link and Open pane / Dismiss buttons. The command's own output row draws the readiness card and severity tiles inline with the **Open full report ↗** link; Claude reads it as one summary line with the report's `file://` link.
 - `/concurrency-audit path/File.swift` — audit any file on demand; the same band and report follow
 

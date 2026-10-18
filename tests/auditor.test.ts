@@ -211,3 +211,155 @@ test('the band stays out of the way while a survey holds it', async ($, on) => {
   })
   expect(await ui.find({ key: 'dismiss' })).toBeUndefined()
 })
+
+const PANE = {
+  component: 'Pane',
+  requestId: 'swift-concurrency',
+  props: { title: 'Swift concurrency', isFocused: true, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } as never,
+} as const
+
+// A fixer subagent's turn ending, as the engine raises it.
+const fixerDone = (agentId: string, reason: 'answer' | 'error' = 'answer') =>
+  ({ answer: 'FIXED', durationMs: 1, isAborted: false, turnId: 't1', agentId, reason }) as never
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`the pane's Fix button spawns a fixer for that one finding and shows it done (${surface})`, async ($, on) => {
+    let file = LEAKY
+    const spawns: { subagent_type?: string; prompt: string }[] = []
+    on('ui.render', () => ENGINE_BAND)
+    on('fs.read', () => ({ value: file }))
+    on('fs.write', () => ({ value: undefined }) as never)
+    on('session.cwd', () => ({ value: '/app' }))
+    on('clock.now', () => ({ value: Date.UTC(2026, 9, 17, 22, 50) }))
+    // A plugin's spawn runs as a background Agent call: the kit hands it down in that shape and reads the
+    // agent id from the call's record, so the type arrives as subagent_type.
+    on('agent.spawn', ($, e) => {
+      spawns.push(e as never)
+      return { model: 'sonnet', result: { agentId: 'a1' } } as never
+    })
+    on('turn.complete', () => ({ text: '' }))
+    await $.command.run(slash('concurrency-audit', '/app/FeedViewModel.swift'))
+
+    const ui = await $.ui.mount({ plugin: 'swift-concurrency-auditor', surface, ...PANE })
+    const key = (await ui.findAll({ text: 'Fix' })).map(b => b.key).find(k => k?.includes('#CA014#'))
+    expect(key).toBeDefined()
+    expect(await ui.find({ text: 'Fix' })).toBeDefined()
+
+    await ui.press({ key: key! })
+    expect(spawns.length).toBe(1)
+    expect(spawns[0]!.subagent_type).toBe('swift-concurrency-auditor:fixer')
+    expect(spawns[0]!.prompt).toContain('ID: CA014')
+    expect(spawns[0]!.prompt).toContain('File: /app/FeedViewModel.swift')
+    expect(spawns[0]!.prompt).toMatch(/Line: \d+/)
+    expect(await ui.find({ text: 'Fixing…' })).toBeDefined()
+
+    // A second press while it runs starts nothing.
+    await ui.press({ key: key! })
+    expect(spawns.length).toBe(1)
+
+    file = CLEAN
+    await $.turn.complete(fixerDone('a1'))
+    expect(await ui.find({ text: 'Fixing…' })).toBeUndefined()
+    expect(await ui.find({ text: /CA014 FeedViewModel\.swift:\d+ fixed/ })).toBeDefined()
+    await ui.unmount()
+  })
+}
+
+test('a fixer that leaves the finding in place shows failed and Retry', async ($, on) => {
+  on('ui.render', () => ENGINE_BAND)
+  on('fs.read', () => ({ value: LEAKY }))
+  on('fs.write', () => ({ value: undefined }) as never)
+  on('session.cwd', () => ({ value: '/app' }))
+  on('clock.now', () => ({ value: Date.UTC(2026, 9, 17, 22, 50) }))
+  on('agent.spawn', () => ({ model: 'sonnet', result: { agentId: 'a2' } }) as never)
+  on('turn.complete', () => ({ text: '' }))
+  await $.command.run(slash('concurrency-audit', '/app/FeedViewModel.swift'))
+
+  const ui = await $.ui.mount({ plugin: 'swift-concurrency-auditor', surface: 'terminal', ...PANE })
+  const key = (await ui.findAll({ text: 'Fix' })).map(b => b.key).find(k => k?.includes('#CA007#'))!
+  await ui.press({ key })
+  await $.turn.complete(fixerDone('a2'))
+  expect(await ui.find({ text: 'Retry' })).toBeDefined()
+  expect(await ui.find({ text: /CA007 .*failed · finding still reported/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a refused spawn marks the fix failed with the reason', async ($, on) => {
+  on('ui.render', () => ENGINE_BAND)
+  on('fs.read', () => ({ value: LEAKY }))
+  on('fs.write', () => ({ value: undefined }) as never)
+  on('session.cwd', () => ({ value: '/app' }))
+  on('clock.now', () => ({ value: Date.UTC(2026, 9, 17, 22, 50) }))
+  on('agent.spawn', () => ({ deny: 'background tasks are off' }))
+  await $.command.run(slash('concurrency-audit', '/app/FeedViewModel.swift'))
+
+  const ui = await $.ui.mount({ plugin: 'swift-concurrency-auditor', surface: 'terminal', ...PANE })
+  const key = (await ui.findAll({ text: 'Fix' })).map(b => b.key).find(k => k?.includes('#CA014#'))!
+  await ui.press({ key })
+  expect(await ui.find({ text: 'Retry' })).toBeDefined()
+  expect(await ui.find({ text: /background tasks are off/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the band above the prompt keeps its rows without Fix buttons', async ($, on) => {
+  on('ui.render', () => ENGINE_BAND)
+  on('fs.read', () => ({ value: LEAKY }))
+  on('fs.write', () => ({ value: undefined }) as never)
+  on('session.cwd', () => ({ value: '/app' }))
+  on('clock.now', () => ({ value: Date.UTC(2026, 9, 17, 22, 50) }))
+  await $.command.run(slash('concurrency-audit', '/app/FeedViewModel.swift'))
+  const ui = await $.ui.mount({ plugin: 'swift-concurrency-auditor', surface: 'terminal', ...BAND })
+  expect(await ui.find({ text: /CA014/ })).toBeDefined()
+  expect(await ui.find({ text: 'Fix' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the pane opens with Escape closing it, from /concurrency and from the band', async ($, on) => {
+  const opens: { id: string; closeOnEscape?: true }[] = []
+  on('ui.render', () => ENGINE_BAND)
+  // Not placed, so /concurrency answers with its text summary; what matters is how the pane was asked for.
+  on('ui.open', ($, e) => {
+    opens.push(e)
+    return { value: { isPlaced: false, reason: 'no surface in the test' } } as never
+  })
+  on('fs.read', () => ({ value: LEAKY }))
+  on('fs.write', () => ({ value: undefined }) as never)
+  on('session.cwd', () => ({ value: '/app' }))
+  on('clock.now', () => ({ value: Date.UTC(2026, 9, 17, 22, 50) }))
+
+  await $.command.run(slash('concurrency'))
+  expect(opens[0]?.id).toBe('swift-concurrency')
+  expect(opens[0]?.closeOnEscape).toBe(true)
+
+  await $.command.run(slash('concurrency-audit', '/app/FeedViewModel.swift'))
+  const ui = await $.ui.mount({ plugin: 'swift-concurrency-auditor', surface: 'terminal', ...BAND })
+  await ui.press({ key: 'pane' })
+  expect(opens[1]?.id).toBe('swift-concurrency')
+  expect(opens[1]?.closeOnEscape).toBe(true)
+  await ui.unmount()
+})
+
+test('closing the pane leaves a running fix alone', async ($, on) => {
+  let file = LEAKY
+  on('ui.render', () => ENGINE_BAND)
+  on('fs.read', () => ({ value: file }))
+  on('fs.write', () => ({ value: undefined }) as never)
+  on('session.cwd', () => ({ value: '/app' }))
+  on('clock.now', () => ({ value: Date.UTC(2026, 9, 17, 22, 50) }))
+  on('agent.spawn', () => ({ model: 'sonnet', result: { agentId: 'a3' } }) as never)
+  on('turn.complete', () => ({ text: '' }))
+  await $.command.run(slash('concurrency-audit', '/app/FeedViewModel.swift'))
+
+  const ui = await $.ui.mount({ plugin: 'swift-concurrency-auditor', surface: 'terminal', ...PANE })
+  const key = (await ui.findAll({ text: 'Fix' })).map(b => b.key).find(k => k?.includes('#CA014#'))!
+  await ui.press({ key })
+  expect(await ui.find({ text: 'Fixing…' })).toBeDefined()
+  // Escape closing the pane takes its drawing away; nothing else is told.
+  await ui.unmount()
+
+  file = CLEAN
+  await $.turn.complete(fixerDone('a3'))
+  const again = await $.ui.mount({ plugin: 'swift-concurrency-auditor', surface: 'terminal', ...PANE })
+  expect(await again.find({ text: /CA014 FeedViewModel\.swift:\d+ fixed/ })).toBeDefined()
+  await again.unmount()
+})
