@@ -37,11 +37,13 @@ In the desktop app: click + next to the prompt box, then Plugins, Add marketplac
 
 The checks are fast pattern matches, not the compiler, so expect some false positives. Silence one on a line with `// audit:ignore CA014`.
 
+To see every rule fire, run `/concurrency-audit tests/fixtures/ConcurrencyIssues.swift` and then `/concurrency-report`: the sample trips all eight rules once each, and its one `// audit:ignore` line stays silent.
+
 ## Commands
 
 - `/concurrency` — live pane of findings for every Swift file touched this session
-- `/concurrency-report` — writes `.concurrency-audit/report.html`, an HTML dashboard with a Swift 6 readiness score
-- `/concurrency-audit path/File.swift` — audit any file on demand
+- `/concurrency-report` — shows the findings inline, in a band above the prompt (Swift 6 readiness score, per-file findings, Open pane / Dismiss buttons), and also writes `.concurrency-audit/report.html`, the HTML dashboard
+- `/concurrency-audit path/File.swift` — audit any file on demand; the findings also appear in the band above the prompt
 
 ## Develop
 

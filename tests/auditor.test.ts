@@ -97,3 +97,66 @@ test('the HTML report fills every placeholder with the session findings', () => 
   expect(html).toContain('Sources/FeedViewModel.swift')
   expect(html).toContain('CA014')
 })
+
+const BAND = {
+  component: 'AbovePrompt',
+  props: {
+    hasSurvey: false,
+    isWorking: false,
+    maxRows: 20,
+    bodyColumns: 100,
+    scroll: { offset: 0, bodyRows: 19 },
+    view: {},
+  } as never,
+} as const
+
+// A slash command as the person types it; the engine fills in origin and presentation.
+const slash = (command: string, args = '') => ({ command, args }) as never
+
+// What the engine draws in the band when no plugin does.
+const ENGINE_BAND = { type: 'Box', props: {}, children: [] } as never
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`/concurrency-report shows findings above the prompt and still writes the HTML (${surface})`, async ($, on) => {
+    const written: string[] = []
+    on('ui.render', () => ENGINE_BAND)
+    on('fs.read', () => ({ value: LEAKY }))
+    on('fs.write', ($, e) => {
+      written.push(e.path)
+      return { value: undefined } as never
+    })
+    on('session.cwd', () => ({ value: '/app' }))
+    on('clock.now', () => ({ value: Date.UTC(2026, 9, 17, 22, 50) }))
+
+    const ui = await $.ui.mount({ plugin: 'swift-concurrency-auditor', surface, ...BAND })
+    expect(await ui.find({ key: 'dismiss' })).toBeUndefined()
+
+    await $.command.run(slash('concurrency-audit', 'Sources/FeedViewModel.swift'))
+    const report = await $.command.run(slash('concurrency-report'))
+
+    expect(written.some(p => p.endsWith('.concurrency-audit/report.html'))).toBe(true)
+    expect(JSON.stringify(report)).toContain('above the prompt')
+    expect(await ui.find({ text: /CA014/ })).toBeDefined()
+    expect(await ui.find({ text: /readiness/ })).toBeDefined()
+    expect(await ui.find({ key: 'dismiss' })).toBeDefined()
+
+    await ui.press({ key: 'dismiss' })
+    expect(await ui.find({ key: 'dismiss' })).toBeUndefined()
+    await ui.unmount()
+  })
+}
+
+test('the band stays out of the way while a survey holds it', async ($, on) => {
+  on('ui.render', () => ENGINE_BAND)
+  on('fs.read', () => ({ value: LEAKY }))
+  on('session.cwd', () => ({ value: '/app' }))
+  await $.command.run(slash('concurrency-audit', '/app/FeedViewModel.swift'))
+
+  const ui = await $.ui.mount({
+    plugin: 'swift-concurrency-auditor',
+    surface: 'terminal',
+    component: 'AbovePrompt',
+    props: { ...(BAND.props as object), hasSurvey: true } as never,
+  })
+  expect(await ui.find({ key: 'dismiss' })).toBeUndefined()
+})
