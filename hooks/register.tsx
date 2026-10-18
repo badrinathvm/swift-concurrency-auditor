@@ -25,9 +25,64 @@ function statusText(map: Record<string, Finding[]>): string | undefined {
   return parts.length ? `concurrency: ${parts.join(' · ')} (/concurrency)` : undefined
 }
 
+const SEV_LABEL: Record<Severity, string> = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' }
+const SEVS: Severity[] = ['critical', 'high', 'medium', 'low']
+
+// One line for the command output and the transcript log: counts, score and where the full report is.
+function summaryLine(map: Record<string, Finding[]>, url: string): string {
+  const all = Object.values(map).flat()
+  const c = counts(all)
+  const files = Object.keys(map).length
+  const parts = SEVS.filter(s => c[s]).map(s => `${c[s]} ${s}`)
+  const found = parts.length ? parts.join(' · ') : 'no findings'
+  return `Concurrency: ${files} file(s) · ${found} · readiness ${readiness(all)}% · full report: ${url}`
+}
+
+// Writes the HTML dashboard and returns where it landed, for the band's link and the summary line.
+async function writeReport($: any, map: Record<string, Finding[]>): Promise<{ path: string; url: string }> {
+  const cwd = await $.session.cwd()
+  const when = new Date(await $.clock.now()).toISOString().replace('T', ' ').slice(0, 16) + ' UTC'
+  await $.fs.write(REPORT_PATH, buildReport(map, cwd, when))
+  return { path: REPORT_PATH, url: `file://${encodeURI(`${cwd}/${REPORT_PATH}`)}` }
+}
+
 type Elements = { Box: any; Text: any }
 
-// One file heading, then a severity line and a dim fix line per finding. The Pane and the band share it.
+// The HTML report's summary in cells: a readiness card beside four severity tiles and the meta line.
+function summaryCards({ Box, Text }: Elements, map: Record<string, Finding[]>) {
+  const all = Object.values(map).flat()
+  const c = counts(all)
+  const score = readiness(all)
+  const filled = Math.round(score / 10)
+  const clean = Object.values(map).filter(l => l.length === 0).length
+  return (
+    <Box flexDirection="row" gap={1}>
+      <Box borderStyle="round" borderDimColor paddingX={2} flexDirection="column" alignItems="center" justifyContent="center">
+        <Text weight="bold" size="title">{score}%</Text>
+        <Text>
+          <Text color="suggestion">{'█'.repeat(filled)}</Text>
+          <Text dimColor>{'░'.repeat(10 - filled)}</Text>
+        </Text>
+        <Text dimColor>Swift 6 readiness</Text>
+      </Box>
+      <Box borderStyle="round" borderDimColor paddingX={1} flexDirection="column" flexGrow={1}>
+        <Box flexDirection="row" gap={1}>
+          {SEVS.map(s => (
+            <Box borderStyle="round" borderDimColor paddingX={1} minWidth={12} flexDirection="column">
+              <Text color={SEV_COLOR[s]} weight="bold" size="heading">{String(c[s])}</Text>
+              <Text dimColor>{SEV_LABEL[s]}</Text>
+            </Box>
+          ))}
+        </Box>
+        <Text dimColor wrap="truncate-end">
+          <Text weight="bold">{String(Object.keys(map).length)}</Text> Swift files touched this session  <Text weight="bold">{String(clean)}</Text> clean  Soft check · nothing blocked
+        </Text>
+      </Box>
+    </Box>
+  )
+}
+
+// One compact row per finding; the why, the snippet and the fix live in the HTML report. The Pane and the band share it.
 function findingRows({ Box, Text }: Elements, files: [string, Finding[]][]) {
   return files.map(([path, list]) => (
     <Box flexDirection="column" marginTop={1}>
@@ -35,12 +90,9 @@ function findingRows({ Box, Text }: Elements, files: [string, Finding[]][]) {
         {list.length ? '' : '✓ '}{path.split('/').pop()}
       </Text>
       {list.map(f => (
-        <Box flexDirection="column">
-          <Text wrap="truncate-end">
-            <Text color={SEV_COLOR[f.sev]}>{f.sev.toUpperCase()}</Text> {f.id} line {f.line}: {f.title}
-          </Text>
-          <Text dimColor wrap="truncate-end">  fix: {f.fix}</Text>
-        </Box>
+        <Text wrap="truncate-end">
+          <Text color={SEV_COLOR[f.sev]} weight="bold">{f.sev.toUpperCase().padEnd(8)}</Text> {f.id}  line {f.line}  {f.title}
+        </Text>
       ))}
     </Box>
   ))
@@ -89,7 +141,15 @@ export const register: Register = on => {
     }
 
     const c = counts(findings)
-    $.ui.log(`${name}: ${findings.length} concurrency finding(s)${c.critical + c.high ? ` (${c.critical + c.high} critical/high)` : ''}`)
+    const map = await read($, byFile)
+    try {
+      const { path: reportPath, url: reportUrl } = await writeReport($, map)
+      await update($, band, (): Band => ({ status: 'shown', source: 'audit', reportPath, reportUrl }))
+      $.ui.log(`${name}: ${summaryLine(map, reportUrl)}`)
+    } catch {
+      // The report is a convenience: a failed write never fails the edit.
+      $.ui.log(`${name}: ${findings.length} concurrency finding(s)`)
+    }
     if (c.critical) $.ui.toast(`${name}: possible data race (${findings.find(f => f.sev === 'critical')?.id})`)
 
     // Claude reads this after the tool's own result. Nothing is blocked.
@@ -111,11 +171,9 @@ export const register: Register = on => {
   on('command.run', { command: 'concurrency-report' }, async $ => {
     const map = await read($, byFile)
     if (!Object.keys(map).length) return { text: 'No Swift files have been audited yet in this session.' }
-    const cwd = await $.session.cwd()
-    const when = new Date(await $.clock.now()).toISOString().replace('T', ' ').slice(0, 16) + ' UTC'
-    await $.fs.write(REPORT_PATH, buildReport(map, cwd, when))
-    await update($, band, (): Band => ({ status: 'shown', source: 'report', reportPath: REPORT_PATH }))
-    return { text: `Concurrency findings shown above the prompt (also written to ${REPORT_PATH})` }
+    const { path: reportPath, url: reportUrl } = await writeReport($, map)
+    await update($, band, (): Band => ({ status: 'shown', source: 'report', reportPath, reportUrl }))
+    return { text: summaryLine(map, reportUrl) }
   })
 
   on('command.run', { command: 'concurrency-audit' }, async ($, e) => {
@@ -131,8 +189,10 @@ export const register: Register = on => {
     const abs = path.startsWith('/') ? path : `${cwd}/${path}`
     const findings = audit(text, abs)
     await update($, byFile, map => ({ ...map, [abs]: findings }))
-    $.ui.status(statusText(await read($, byFile)))
-    await update($, band, (): Band => ({ status: 'shown', source: 'audit' }))
+    const map = await read($, byFile)
+    $.ui.status(statusText(map))
+    const { path: reportPath, url: reportUrl } = await writeReport($, map)
+    await update($, band, (): Band => ({ status: 'shown', source: 'audit', reportPath, reportUrl }))
     // Claude reads command text too, so it can offer to fix what was found.
     return { text: findings.length ? reminder(abs, findings) : `${path}: no concurrency findings.` }
   })
@@ -148,15 +208,12 @@ export const register: Register = on => {
         </Box>
       )
     }
-    const c = counts(files.flatMap(([, l]) => l))
     return (
       <Box flexDirection="column">
-        <Text weight="bold">
-          {files.length} file(s) · {c.critical} critical · {c.high} high · {c.medium} medium · {c.low} low
-        </Text>
+        {summaryCards({ Box, Text }, map)}
         {findingRows({ Box, Text }, files)}
         <Box marginTop={1}>
-          <Text dimColor>/concurrency-report shows these above the prompt and writes the HTML dashboard · // audit:ignore CAxxx silences a line</Text>
+          <Text dimColor>/concurrency-report writes the full HTML report · // audit:ignore CAxxx silences a line</Text>
         </Box>
       </Box>
     )
@@ -168,29 +225,26 @@ export const register: Register = on => {
     const state = await read($, band)
     if (state.status === 'hidden') return next(e)
 
-    const { Box, Button, Text } = $.ui.resolve(e)
-    const files = Object.entries(await read($, byFile))
+    const { Box, Button, Link, Text } = $.ui.resolve(e)
+    const map = await read($, byFile)
+    const files = Object.entries(map)
     const all = files.flatMap(([, l]) => l)
-    const c = counts(all)
-    const lead = c.critical ? 'error' : c.high || c.medium ? 'warning' : 'success'
     const dismiss = () => update($, band, (): Band => ({ status: 'hidden' }))
 
     return (
       <Box flexDirection="column">
-        {all.length ? (
-          <Text wrap="truncate-end">
-            <Text color={lead} weight="bold">🛡 Concurrency audit · Swift 6 readiness {readiness(all)}/100</Text>
-            <Text> · {files.length} file(s) · {c.critical} critical · {c.high} high · {c.medium} med · {c.low} low</Text>
-          </Text>
-        ) : (
-          <Text color="success">✓ No concurrency findings in {files.length} Swift file(s)</Text>
-        )}
+        <Text weight="bold">⚡ Concurrency Auditor</Text>
+        {summaryCards({ Box, Text }, map)}
         {all.length ? findingRows({ Box, Text }, files.filter(([, l]) => l.length)) : null}
-        <Box marginTop={1}>
+        <Box marginTop={1} gap={1}>
+          {state.reportUrl ? (
+            <Text>
+              <Link href={state.reportUrl}>Open full report ↗</Link>
+              <Text dimColor> {state.reportPath}</Text>
+            </Text>
+          ) : null}
           <Button key="pane" label="Open pane" onPress={() => $.ui.open({ id: PANE, title: 'Swift concurrency' })} />
-          <Text> </Text>
           <Button key="dismiss" label="Dismiss" onPress={dismiss} />
-          {state.reportPath ? <Text dimColor> HTML: {state.reportPath}</Text> : null}
         </Box>
       </Box>
     )

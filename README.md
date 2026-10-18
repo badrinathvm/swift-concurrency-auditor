@@ -42,8 +42,10 @@ To see every rule fire, run `/concurrency-audit tests/fixtures/ConcurrencyIssues
 ## Commands
 
 - `/concurrency` — live pane of findings for every Swift file touched this session
-- `/concurrency-report` — shows the findings inline, in a band above the prompt (Swift 6 readiness score, per-file findings, Open pane / Dismiss buttons), and also writes `.concurrency-audit/report.html`, the HTML dashboard
-- `/concurrency-audit path/File.swift` — audit any file on demand; the findings also appear in the band above the prompt
+- `/concurrency-report` — writes `.concurrency-audit/report.html`, the full HTML dashboard, and shows a visual summary in a band above the prompt: a Swift 6 readiness card beside Critical / High / Medium / Low tiles, one compact row per finding, an **Open full report ↗** link and Open pane / Dismiss buttons. The command itself prints one summary line with the report's `file://` link.
+- `/concurrency-audit path/File.swift` — audit any file on demand; the same band and report follow
+
+Every Edit/Write to a Swift file that changes its findings also refreshes the report and the band, and logs one summary line with the link. Open the report from the band's link, or with `open .concurrency-audit/report.html`.
 
 ## Develop
 

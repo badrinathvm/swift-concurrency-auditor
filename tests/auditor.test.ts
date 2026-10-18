@@ -68,6 +68,9 @@ test('an Edit to a Swift file runs, then Claude reads the findings as context', 
   // Stand in for the engine: the edit succeeds and the file holds LEAKY.
   on('tool.call', () => ({ result: 'ok' }))
   on('fs.read', () => ({ value: LEAKY }))
+  on('fs.write', () => ({ value: undefined }) as never)
+  on('session.cwd', () => ({ value: '/app' }))
+  on('clock.now', () => ({ value: Date.UTC(2026, 9, 17, 22, 50) }))
 
   const ran = await $.tool.call({
     tool: 'Edit',
@@ -135,9 +138,13 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const report = await $.command.run(slash('concurrency-report'))
 
     expect(written.some(p => p.endsWith('.concurrency-audit/report.html'))).toBe(true)
-    expect(JSON.stringify(report)).toContain('above the prompt')
+    const text = JSON.stringify(report)
+    expect(text).toContain('readiness')
+    expect(text).toContain('file:///app/.concurrency-audit/report.html')
     expect(await ui.find({ text: /CA014/ })).toBeDefined()
-    expect(await ui.find({ text: /readiness/ })).toBeDefined()
+    expect(await ui.find({ text: /Swift 6 readiness/ })).toBeDefined()
+    for (const label of ['Critical', 'High', 'Medium', 'Low']) expect(await ui.find({ text: label })).toBeDefined()
+    expect(await ui.find({ text: /Open full report/ })).toBeDefined()
     expect(await ui.find({ key: 'dismiss' })).toBeDefined()
 
     await ui.press({ key: 'dismiss' })
@@ -146,10 +153,33 @@ for (const surface of ['terminal', 'desktop'] as const) {
   })
 }
 
+test('a Swift Write with findings writes the HTML report and shows the visual band', async ($, on) => {
+  const written: string[] = []
+  on('ui.render', () => ENGINE_BAND)
+  on('tool.call', () => ({ result: 'ok' }))
+  on('fs.read', () => ({ value: LEAKY }))
+  on('fs.write', ($, e) => {
+    written.push(e.path)
+    return { value: undefined } as never
+  })
+  on('session.cwd', () => ({ value: '/app' }))
+  on('clock.now', () => ({ value: Date.UTC(2026, 9, 17, 22, 50) }))
+
+  const ui = await $.ui.mount({ plugin: 'swift-concurrency-auditor', surface: 'terminal', ...BAND })
+  await $.tool.call({ tool: 'Write', file_path: '/app/FeedViewModel.swift', content: LEAKY })
+
+  expect(written.some(p => p.endsWith('.concurrency-audit/report.html'))).toBe(true)
+  expect(await ui.find({ text: /Swift 6 readiness/ })).toBeDefined()
+  expect(await ui.find({ text: /Open full report/ })).toBeDefined()
+  await ui.unmount()
+})
+
 test('the band stays out of the way while a survey holds it', async ($, on) => {
   on('ui.render', () => ENGINE_BAND)
   on('fs.read', () => ({ value: LEAKY }))
+  on('fs.write', () => ({ value: undefined }) as never)
   on('session.cwd', () => ({ value: '/app' }))
+  on('clock.now', () => ({ value: Date.UTC(2026, 9, 17, 22, 50) }))
   await $.command.run(slash('concurrency-audit', '/app/FeedViewModel.swift'))
 
   const ui = await $.ui.mount({

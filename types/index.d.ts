@@ -13,7 +13,7 @@ export type Finding = {
 
 export type Band =
   | { status: 'hidden' }
-  | { status: 'shown'; source: 'report' | 'audit'; reportPath?: string }
+  | { status: 'shown'; source: 'report' | 'audit'; reportPath?: string; reportUrl?: string }
 
 declare module 'claude-code' {
   interface PluginState {
