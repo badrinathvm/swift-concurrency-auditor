@@ -3,6 +3,7 @@ import Observation
 
 // Dummy file for exercising /concurrency-report. Expected: CA007, CA001, CA014, CA052.
 // Dummy commit marker for concurrency review.
+// Dummy marker: testing /concurrency pane and Fix button.
 
 // CA007 (high): @Observable class not isolated to @MainActor
 @Observable
