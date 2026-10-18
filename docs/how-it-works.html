@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>body{margin:0}</style>
+</head>
+<body>
+<title>Swift Concurrency Auditor</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: a single readable column; the interactive demo pairs a terminal-style pane with the readiness card, stacking at phone width. */
+:root{
+  --bg:#f5f6fa; --surface:#ffffff; --surface-2:#eef0f6; --border:#dde1ea;
+  --fg:#151823; --muted:#5d6475; --accent:#5b5bd6; --accent-fg:#ffffff;
+  --term-bg:#12141c; --term-fg:#d9dce6; --term-dim:#7d8496; --term-border:#2a2e3b;
+  --crit:#d92d20; --crit-bg:#fdecea; --high:#c2410c; --high-bg:#fff1e6;
+  --med:#a16207; --med-bg:#fdf6e3; --low:#2563eb; --low-bg:#e8f0fe; --ok:#15803d;
+  --t-crit:#ff6b5e; --t-high:#ffb14a; --t-med:#e8c46a; --t-low:#8fb4ff; --t-ok:#5ed38a;
+  --font-body:"IBM Plex Sans",-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e1016; --surface:#161922; --surface-2:#1e222d; --border:#2b3040;
+    --fg:#e7e9f0; --muted:#9aa1b3; --accent:#8f8fff; --accent-fg:#0e1016;
+    --term-bg:#0a0b10; --term-border:#262a36;
+    --crit:#ff6b5e; --crit-bg:#3a1714; --high:#ffa24a; --high-bg:#3a2010;
+    --med:#e8c46a; --med-bg:#33290f; --low:#8fb4ff; --low-bg:#14233d; --ok:#5ed38a;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0e1016; --surface:#161922; --surface-2:#1e222d; --border:#2b3040;
+  --fg:#e7e9f0; --muted:#9aa1b3; --accent:#8f8fff; --accent-fg:#0e1016;
+  --term-bg:#0a0b10; --term-border:#262a36;
+  --crit:#ff6b5e; --crit-bg:#3a1714; --high:#ffa24a; --high-bg:#3a2010;
+  --med:#e8c46a; --med-bg:#33290f; --low:#8fb4ff; --low-bg:#14233d; --ok:#5ed38a;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:15px/1.55 var(--font-body)}
+.wrap{max-width:1040px;margin:0 auto;padding-block:32px 64px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  display:flex;flex-direction:column;gap:44px}
+h1,h2,h3{text-wrap:balance;margin:0;line-height:1.2}
+h1{font-size:clamp(28px,4.4vw,40px);font-weight:700;letter-spacing:-.015em}
+h2{font-size:22px;font-weight:600}
+h3{font-size:15px;font-weight:600}
+p{margin:0;max-width:65ch}
+code,.mono{font-family:var(--font-mono);font-size:.9em}
+.eyebrow{font:600 12px/1 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+.muted{color:var(--muted)}
+section{display:flex;flex-direction:column;gap:16px}
+.lede{font-size:17px;color:var(--muted)}
+
+/* Hero */
+.hero{display:flex;flex-direction:column;gap:14px}
+.hero .lede b{color:var(--fg);font-weight:600}
+
+/* Flow strip */
+.flow{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;list-style:none;margin:0;padding:0;counter-reset:step}
+.flow li{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:4px;min-width:0;counter-increment:step;position:relative}
+.flow li::before{content:counter(step);font:600 11px/1 var(--font-mono);color:var(--accent)}
+.flow li b{font-size:14px}
+.flow li span{font-size:13px;color:var(--muted)}
+.flow li.fix{border-color:var(--accent)}
+@media (max-width:860px){.flow{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:480px){.flow{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* Demo */
+.demo{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:820px){.demo{grid-template-columns:1fr}}
+.term{background:var(--term-bg);color:var(--term-fg);border:1px solid var(--term-border);border-radius:12px;font:13px/1.6 var(--font-mono);min-width:0;overflow:hidden}
+.term-bar{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--term-border);color:var(--term-dim);font-size:12px}
+.term-bar .dots{display:flex;gap:5px}
+.term-bar .dots i{width:9px;height:9px;border-radius:50%;background:var(--term-border);display:block}
+.term-body{padding:12px 14px 14px;display:flex;flex-direction:column;gap:12px;overflow-x:auto}
+.tfile{font-weight:600}
+.rows{display:flex;flex-direction:column;gap:2px}
+.row{display:grid;grid-template-columns:5.5em 4em 4.8em minmax(0,1fr) auto;gap:8px;align-items:center;min-height:30px;border-radius:6px;padding:0 4px;transition:background .3s,opacity .3s}
+.row.gone{opacity:0}
+.row .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sev-critical{color:var(--t-crit);font-weight:600}.sev-high{color:var(--t-high);font-weight:600}
+.sev-medium{color:var(--t-med)}.sev-low{color:var(--t-low)}
+.dim{color:var(--term-dim)}
+.tbtn{font:600 12px/1 var(--font-mono);background:transparent;color:var(--term-fg);border:1px solid var(--term-dim);border-radius:5px;padding:6px 9px;cursor:pointer;white-space:nowrap}
+.tbtn:hover:not(:disabled){border-color:var(--term-fg);background:#ffffff12}
+.tbtn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tbtn:disabled{cursor:default;color:var(--term-dim);border-style:dashed}
+.tbtn.running{color:var(--t-high);border-color:var(--t-high)}
+.tbtn.retry{color:var(--t-crit);border-color:var(--t-crit)}
+.runs{display:flex;flex-direction:column;gap:2px}
+.ok{color:var(--t-ok)}.bad{color:var(--t-crit)}
+.clean{color:var(--t-ok)}
+.term-foot{color:var(--term-dim);font-size:12px}
+
+.side{display:flex;flex-direction:column;gap:12px;min-width:0}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.score{display:flex;align-items:center;gap:16px}
+.ring{position:relative;width:96px;height:96px;flex:none}
+.ring svg{transform:rotate(-90deg);display:block}
+.ring circle{fill:none;stroke-width:9}
+.ring .track{stroke:var(--surface-2)}
+.ring .bar{stroke:var(--accent);stroke-linecap:round;transition:stroke-dashoffset .5s ease}
+.ring .val{position:absolute;inset:0;display:grid;place-items:center;font:700 24px/1 var(--font-body);font-variant-numeric:tabular-nums}
+.tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.tile{background:var(--surface-2);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:2px}
+.tile .n{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
+.tile .l{font-size:11px;color:var(--muted)}
+.tile.critical .n{color:var(--crit)}.tile.high .n{color:var(--high)}.tile.medium .n{color:var(--med)}.tile.low .n{color:var(--low)}
+.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button.ui{font:500 13px/1 var(--font-body);background:var(--surface);color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;cursor:pointer}
+button.ui:hover{border-color:var(--muted)}
+button.ui:focus-visible,.chip:focus-visible,.rule:focus-visible,.step button:focus-visible,.toggle input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.toggle{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--muted);cursor:pointer}
+.toggle input{accent-color:var(--accent);width:16px;height:16px;margin:0}
+.note{font-size:13px;color:var(--muted)}
+
+/* Calculator */
+.calc{display:grid;grid-template-columns:auto minmax(0,1fr);gap:24px;align-items:center}
+@media (max-width:640px){.calc{grid-template-columns:1fr}}
+.steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+@media (max-width:520px){.steps{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.step{background:var(--surface-2);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:6px}
+.step .h{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;color:var(--muted)}
+.step .h b{font:600 12px var(--font-mono)}
+.step.critical .h b{color:var(--crit)}.step.high .h b{color:var(--high)}.step.medium .h b{color:var(--med)}.step.low .h b{color:var(--low)}
+.step .ctl{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.step .ctl output{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
+.step button{width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--surface);color:var(--fg);font:600 16px/1 var(--font-mono);cursor:pointer}
+.formula{font:13px/1.6 var(--font-mono);background:var(--surface-2);border-radius:8px;padding:10px 12px;overflow-x:auto;white-space:nowrap}
+.formula b{color:var(--accent)}
+
+/* Rules */
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{font:500 13px/1 var(--font-body);border:1px solid var(--border);background:var(--surface);color:var(--fg);border-radius:999px;padding:7px 12px;cursor:pointer}
+.chip[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.rules{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+@media (max-width:720px){.rules{grid-template-columns:1fr}}
+.rule{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.rule:hover{border-color:var(--muted)}
+.rhead{display:flex;flex-direction:column;gap:8px;text-align:left;font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;width:100%}
+.rhead:focus-visible{outline:2px solid var(--accent);outline-offset:4px;border-radius:4px}
+.rtitle{font-size:15px;font-weight:600}
+.rule .top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.pill{font:600 11px/1 var(--font-mono);letter-spacing:.04em;text-transform:uppercase;padding:4px 7px;border-radius:5px}
+.pill.critical{color:var(--crit);background:var(--crit-bg)}.pill.high{color:var(--high);background:var(--high-bg)}
+.pill.medium{color:var(--med);background:var(--med-bg)}.pill.low{color:var(--low);background:var(--low-bg)}
+.rid{font:600 12px var(--font-mono);color:var(--muted)}
+.rule .more{display:none;flex-direction:column;gap:8px}
+.rule.open .more{display:flex}
+.rule pre{margin:0;background:var(--term-bg);color:var(--term-fg);border-radius:8px;padding:10px 12px;font:12.5px/1.55 var(--font-mono);overflow-x:auto}
+.rule .fixhint{font-size:13px}
+.rule .fixhint b{color:var(--ok)}
+.hint{font-size:12px;color:var(--muted)}
+
+/* Commands */
+.cmds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+@media (max-width:760px){.cmds{grid-template-columns:1fr}}
+.cmd{border-top:2px solid var(--accent);padding-top:10px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.cmd code{font-size:14px;font-weight:600}
+.cmd p{font-size:14px;color:var(--muted)}
+footer{font-size:13px;color:var(--muted);border-top:1px solid var(--border);padding-top:16px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <header class="hero">
+    <span class="eyebrow">Claude Code plugin</span>
+    <h1>Swift Concurrency Auditor</h1>
+    <p class="lede">Each time Claude edits a <code>.swift</code> file, the auditor checks it for data races, actor-isolation gaps and leaking tasks. <b>Nothing is blocked.</b> Claude gets a short note with the findings and can fix them in the same turn. You see the results on the status line, in a live pane with a <b>Fix</b> button for each finding, and in a Swift 6 readiness score.</p>
+  </header>
+
+  <section aria-labelledby="flow-h">
+    <h2 id="flow-h">What happens after an edit</h2>
+    <ol class="flow">
+      <li><b>Claude edits</b><span>Edit or Write on a <code>.swift</code> file</span></li>
+      <li><b>Soft audit</b><span>Fast pattern checks run after the edit; nothing is blocked</span></li>
+      <li><b>Note to Claude</b><span>Findings with fix hints; the status line updates</span></li>
+      <li><b>Pane and report</b><span><code>/concurrency</code> and <code>/concurrency-report</code> refresh</span></li>
+      <li class="fix"><b>Fix</b><span>A background agent fixes that one finding, without committing</span></li>
+      <li><b>Re-audit</b><span>Counted as fixed only once the finding is gone</span></li>
+    </ol>
+  </section>
+
+  <section aria-labelledby="demo-h">
+    <span class="eyebrow">Try it</span>
+    <h2 id="demo-h">The <code>/concurrency</code> pane and its Fix buttons</h2>
+    <p class="muted">This is a simulation of the pane after Claude edited <code>DummyProfileViewModel.swift</code>. Press <b>Fix</b> on a finding. Only one fix runs per file at a time, so the other buttons on that file show <b>Wait</b> while it runs.</p>
+    <div class="demo">
+      <div class="term" role="region" aria-label="Simulated /concurrency pane">
+        <div class="term-bar"><span class="dots"><i></i><i></i><i></i></span><span>/concurrency</span></div>
+        <div class="term-body">
+          <div>
+            <div class="tfile">DummyProfileViewModel.swift</div>
+            <div class="rows" id="rows"></div>
+          </div>
+          <div id="runsBox" hidden>
+            <div class="tfile">Fix runs</div>
+            <div class="runs" id="runs"></div>
+          </div>
+          <div class="term-foot">Fix starts an agent for that one finding, nothing is committed · /concurrency-report writes the full HTML report · // audit:ignore CAxxx silences a line</div>
+        </div>
+      </div>
+      <div class="side">
+        <div class="card">
+          <div class="score">
+            <div class="ring" aria-hidden="true">
+              <svg width="96" height="96" viewBox="0 0 96 96"><circle class="track" cx="48" cy="48" r="40"/><circle class="bar" id="simBar" cx="48" cy="48" r="40" stroke-dasharray="251.3" stroke-dashoffset="0"/></svg>
+              <div class="val" id="simVal">0%</div>
+            </div>
+            <div><h3>Swift 6 readiness</h3><p class="note">Recomputed after every audit</p></div>
+          </div>
+          <div class="tiles" id="simTiles"></div>
+        </div>
+        <div class="controls">
+          <label class="toggle" for="failNext"><input type="checkbox" id="failNext"> Make the next fix fail</label>
+          <button class="ui" id="reset" type="button">Reset</button>
+        </div>
+        <p class="note">A failed run leaves the finding in place and its button changes to <b>Retry</b>. The agent can only read and edit files, so it never commits or pushes.</p>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="calc-h">
+    <span class="eyebrow">Readiness score</span>
+    <h2 id="calc-h">How the score is calculated</h2>
+    <p class="muted">The score starts at 100 and each open finding subtracts points by severity, down to a minimum of 0. Change the counts to see the effect. The starting counts match the screenshot in the README.</p>
+    <div class="card calc">
+      <div class="score">
+        <div class="ring" aria-hidden="true">
+          <svg width="96" height="96" viewBox="0 0 96 96"><circle class="track" cx="48" cy="48" r="40"/><circle class="bar" id="calcBar" cx="48" cy="48" r="40" stroke-dasharray="251.3" stroke-dashoffset="0"/></svg>
+          <div class="val" id="calcVal">0%</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:12px;min-width:0">
+        <div class="steps" id="steps"></div>
+        <div class="formula" id="formula" aria-live="polite"></div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="rules-h">
+    <span class="eyebrow">What it checks</span>
+    <h2 id="rules-h">Eight rules</h2>
+    <p class="muted">The checks are fast pattern matches, not the compiler, so expect some false positives. Click a rule to see an example of code it flags and how to fix it.</p>
+    <div class="chips" id="chips" role="group" aria-label="Filter by severity"></div>
+    <div class="rules" id="rules"></div>
+    <p class="hint">To silence a rule on one line, add <code>// audit:ignore CA014</code> on that line or the line above it.</p>
+  </section>
+
+  <section aria-labelledby="cmd-h">
+    <h2 id="cmd-h">Commands</h2>
+    <div class="cmds">
+      <div class="cmd"><code>/concurrency</code><p>Opens a live pane with the findings for every Swift file touched this session, a Fix button for each finding, and a list of finished fix runs. Esc closes it.</p></div>
+      <div class="cmd"><code>/concurrency-report</code><p>Writes the HTML dashboard to <code>.concurrency-audit/report.html</code> and shows a readiness card and severity tiles above the prompt.</p></div>
+      <div class="cmd"><code>/concurrency-audit path/File.swift</code><p>Audits any Swift file on demand. The pane, band and report update the same way.</p></div>
+    </div>
+  </section>
+
+  <footer>Swift Concurrency Auditor for Claude Code. All findings on this page are examples.</footer>
+</div>
+
+<script>
+(function(){
+  var SEV = ["critical","high","medium","low"];
+  var NAME = {critical:"Critical",high:"High",medium:"Medium",low:"Low"};
+  var PENALTY = {critical:15,high:8,medium:4,low:1};
+  var CIRC = 251.3;
+
+  function readiness(c){
+    var lost = c.critical*PENALTY.critical + c.high*PENALTY.high + c.medium*PENALTY.medium + c.low*PENALTY.low;
+    return Math.max(0, 100 - lost);
+  }
+  function setRing(bar, val, score){
+    document.getElementById(bar).setAttribute("stroke-dashoffset", (CIRC*(1-score/100)).toFixed(1));
+    document.getElementById(val).textContent = score + "%";
+  }
+  function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+  /* ---------- Fix simulation ---------- */
+  var START = [
+    {id:"CA001", sev:"critical", line:16, title:"Mutating self from a detached task"},
+    {id:"CA007", sev:"high", line:10, title:"UI-observable type not isolated to @MainActor"},
+    {id:"CA014", sev:"high", line:22, title:"Looping Task retains self strongly"},
+    {id:"CA052", sev:"low", line:32, title:"DispatchQueue.main.async inside async code"}
+  ];
+  var sim, timers = [];
+  function resetSim(){
+    timers.forEach(clearTimeout); timers = [];
+    sim = {open: START.map(function(f){ return Object.assign({}, f, {state:"idle"}); }), runs: [], running: null};
+    renderSim();
+  }
+  function counts(list){
+    var c = {critical:0,high:0,medium:0,low:0};
+    list.forEach(function(f){ c[f.sev]++; });
+    return c;
+  }
+  function renderSim(){
+    var rows = document.getElementById("rows");
+    if (!sim.open.length){
+      rows.innerHTML = '<div class="clean">✓ No findings. The file is clean.</div>';
+    } else {
+      rows.innerHTML = sim.open.map(function(f){
+        var label = "Fix", cls = "", dis = false;
+        if (sim.running === f.id){ label = f.state === "audit" ? "Re-auditing…" : "Fixing…"; cls = "running"; dis = true; }
+        else if (sim.running){ label = "Wait"; dis = true; }
+        else if (f.state === "failed"){ label = "Retry"; cls = "retry"; }
+        return '<div class="row" data-id="'+f.id+'">' +
+          '<span class="sev-'+f.sev+'">'+f.sev.toUpperCase()+'</span>' +
+          '<span>'+f.id+'</span><span class="dim">line '+f.line+'</span>' +
+          '<span class="t" title="'+esc(f.title)+'">'+esc(f.title)+'</span>' +
+          '<button class="tbtn '+cls+'" type="button" data-fix="'+f.id+'"'+(dis?" disabled":"")+'>[ '+label+' ]</button></div>';
+      }).join("");
+    }
+    var runsBox = document.getElementById("runsBox");
+    runsBox.hidden = !sim.runs.length;
+    document.getElementById("runs").innerHTML = sim.runs.map(function(r){
+      return r.ok
+        ? '<div><span class="ok">✓</span> '+r.id+' DummyProfileViewModel.swift:'+r.line+' fixed</div>'
+        : '<div><span class="bad">✗</span> '+r.id+' DummyProfileViewModel.swift:'+r.line+' failed · finding still reported</div>';
+    }).join("");
+    var c = counts(sim.open);
+    setRing("simBar","simVal", readiness(c));
+    document.getElementById("simTiles").innerHTML = SEV.map(function(s){
+      return '<div class="tile '+s+'"><span class="n">'+c[s]+'</span><span class="l">'+NAME[s]+'</span></div>';
+    }).join("");
+  }
+  function startFix(id){
+    if (sim.running) return;
+    var f = sim.open.find(function(x){ return x.id === id; });
+    if (!f) return;
+    var fail = document.getElementById("failNext").checked;
+    sim.running = id; f.state = "running"; renderSim();
+    timers.push(setTimeout(function(){ f.state = "audit"; renderSim(); }, 1400));
+    timers.push(setTimeout(function(){
+      sim.running = null;
+      if (fail){
+        f.state = "failed";
+        document.getElementById("failNext").checked = false;
+        sim.runs.unshift({id:f.id, line:f.line, ok:false});
+        renderSim();
+        return;
+      }
+      sim.runs.unshift({id:f.id, line:f.line, ok:true});
+      var row = document.querySelector('.row[data-id="'+id+'"]');
+      if (row) row.classList.add("gone");
+      timers.push(setTimeout(function(){
+        sim.open = sim.open.filter(function(x){ return x.id !== id; });
+        renderSim();
+      }, 280));
+    }, 2300));
+  }
+  document.getElementById("rows").addEventListener("click", function(e){
+    var b = e.target.closest("[data-fix]");
+    if (b && !b.disabled) startFix(b.getAttribute("data-fix"));
+  });
+  document.getElementById("reset").addEventListener("click", resetSim);
+  resetSim();
+
+  /* ---------- Readiness calculator ---------- */
+  var calc = {critical:0, high:2, medium:0, low:2};
+  function renderCalc(){
+    document.getElementById("steps").innerHTML = SEV.map(function(s){
+      return '<div class="step '+s+'"><div class="h"><span>'+NAME[s]+'</span><b>−'+PENALTY[s]+' each</b></div>' +
+        '<div class="ctl"><button type="button" id="dec-'+s+'" data-s="'+s+'" data-d="-1" aria-label="Fewer '+NAME[s]+' findings">−</button>' +
+        '<output id="out-'+s+'">'+calc[s]+'</output>' +
+        '<button type="button" id="inc-'+s+'" data-s="'+s+'" data-d="1" aria-label="More '+NAME[s]+' findings">+</button></div></div>';
+    }).join("");
+    var score = readiness(calc);
+    setRing("calcBar","calcVal", score);
+    var parts = SEV.filter(function(s){ return calc[s]; }).map(function(s){ return PENALTY[s]+"×"+calc[s]; });
+    document.getElementById("formula").innerHTML = "max(0, 100 − " + (parts.length ? parts.join(" − ") : "0") + ") = <b>" + score + "%</b>";
+  }
+  document.getElementById("steps").addEventListener("click", function(e){
+    var b = e.target.closest("button[data-s]");
+    if (!b) return;
+    var s = b.getAttribute("data-s");
+    calc[s] = Math.max(0, Math.min(20, calc[s] + Number(b.getAttribute("data-d"))));
+    var id = b.id;
+    renderCalc();
+    var again = document.getElementById(id); if (again) again.focus();
+  });
+  renderCalc();
+
+  /* ---------- Rule explorer ---------- */
+  var RULES = [
+    {id:"CA001", sev:"critical", title:"Task.detached that mutates self (likely data race)",
+     code:"func loadAvatar(_ url: URL) {\n  Task.detached {\n    self.avatars[url] = try? Data(contentsOf: url)\n  }\n}",
+     fix:"Make the type an actor (or @MainActor), or protect the state with Mutex, then await the mutation."},
+    {id:"CA007", sev:"high", title:"@Observable / ObservableObject class not isolated to @MainActor",
+     code:"@Observable\nfinal class ProfileViewModel {\n  var name = \"\"\n}",
+     fix:"Annotate the type with @MainActor."},
+    {id:"CA014", sev:"high", title:"Looping Task that captures self strongly",
+     code:"Task {\n  while true {\n    await self.sync()\n    try? await Task.sleep(for: .seconds(60))\n  }\n}",
+     fix:"Capture [weak self], guard let self inside the loop, check Task.isCancelled, and cancel the stored task in deinit (or use the .task modifier)."},
+    {id:"CA021", sev:"medium", title:"@unchecked Sendable or nonisolated(unsafe)",
+     code:"final class Cache: @unchecked Sendable {\n  var items: [String: Data] = [:]\n}",
+     fix:"Prefer an actor, Mutex<T> from Synchronization, or immutable lets; keep the escape hatch only with a comment proving safety."},
+    {id:"CA030", sev:"medium", title:"TaskGroup children that never check cancellation",
+     code:"group.addTask {\n  let data = try await download(url)\n  return process(data)\n}",
+     fix:"Call try Task.checkCancellation() (or check Task.isCancelled) before expensive work in each child."},
+    {id:"CA042", sev:"low", title:"Blocking calls in async code",
+     code:"func refresh() async {\n  semaphore.wait()\n  Thread.sleep(forTimeInterval: 1)\n}",
+     fix:"Bridge callbacks with withCheckedContinuation; use try await Task.sleep(for:)."},
+    {id:"CA051", sev:"low", title:"Task.detached where Task likely suffices",
+     code:"Task.detached {\n  await logger.flush()\n}",
+     fix:"Use Task { } unless you specifically need to leave the current actor."},
+    {id:"CA052", sev:"low", title:"DispatchQueue.main.async inside async code",
+     code:"func reload() async {\n  let items = await api.fetch()\n  DispatchQueue.main.async { self.items = items }\n}",
+     fix:"Use await MainActor.run { } or mark the function @MainActor."}
+  ];
+  var filter = "all";
+  function renderChips(){
+    document.getElementById("chips").innerHTML = ["all"].concat(SEV).map(function(s){
+      var n = s === "all" ? RULES.length : RULES.filter(function(r){ return r.sev === s; }).length;
+      return '<button class="chip" type="button" data-f="'+s+'" aria-pressed="'+(filter===s)+'">'+(s==="all"?"All":NAME[s])+' · '+n+'</button>';
+    }).join("");
+  }
+  function renderRules(){
+    document.getElementById("rules").innerHTML = RULES.filter(function(r){ return filter === "all" || r.sev === filter; }).map(function(r, i){
+      return '<div class="rule'+(i===0?' open':'')+'">' +
+        '<button class="rhead" type="button" aria-expanded="'+(i===0)+'">' +
+        '<span class="top"><span class="pill '+r.sev+'">'+r.sev+'</span><span class="rid">'+r.id+'</span></span>' +
+        '<span class="rtitle">'+esc(r.title)+'</span></button>' +
+        '<div class="more"><pre>'+esc(r.code)+'</pre><p class="fixhint"><b>Fix:</b> '+esc(r.fix)+'</p></div></div>';
+    }).join("");
+  }
+  document.getElementById("chips").addEventListener("click", function(e){
+    var b = e.target.closest("[data-f]"); if (!b) return;
+    filter = b.getAttribute("data-f"); renderChips(); renderRules();
+  });
+  document.getElementById("rules").addEventListener("click", function(e){
+    var b = e.target.closest(".rhead"); if (!b) return;
+    var open = b.getAttribute("aria-expanded") !== "true";
+    b.setAttribute("aria-expanded", String(open));
+    b.parentElement.classList.toggle("open", open);
+  });
+  renderChips(); renderRules();
+})();
+</script>
+</body>
+</html>
