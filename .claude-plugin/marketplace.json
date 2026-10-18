@@ -1,0 +1,5 @@
+{
+  "name": "swift-concurrency-auditor",
+  "owner": { "name": "badrinathvm" },
+  "plugins": [{ "name": "swift-concurrency-auditor", "source": "./" }]
+}

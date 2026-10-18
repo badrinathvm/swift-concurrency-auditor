@@ -1,0 +1,4 @@
+{
+  "description": "Swift concurrency auditor hooks module",
+  "modules": ["./register.tsx"]
+}
