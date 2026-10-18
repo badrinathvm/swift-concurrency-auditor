@@ -1,6 +1,6 @@
 {
   "name": "swift-concurrency-auditor",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Soft-checks every Swift file Claude edits for concurrency bugs and shows findings above the prompt, in a pane, on the status line and in an HTML report",
   "types": "./types/index.d.ts"
 }
