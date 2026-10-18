@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { Band, Finding, Severity } from '../types'
+import type { Band, Finding, FixState, Severity } from '../types'
 import { audit, counts, fingerprint, reminder } from './rules'
 import { buildReport, readiness } from './report'
 
@@ -9,6 +9,15 @@ const PANE = 'swift-concurrency'
 const REPORT_PATH = '.concurrency-audit/report.html'
 const byFile = atom({ plugin: 'swift-concurrency-auditor', key: 'byFile' } as const, {})
 const band = atom({ plugin: 'swift-concurrency-auditor', key: 'band' } as const, { status: 'hidden' } as Band)
+const fixes = atom({ plugin: 'swift-concurrency-auditor', key: 'fixes' } as const, {} as Record<string, FixState>)
+
+const FIXER = 'swift-concurrency-auditor:fixer'
+const FIXER_PROMPT = `You fix exactly one Swift concurrency finding that the Swift concurrency auditor reported.
+- Read the file, then change only the code that causes this one finding, with the smallest edit that resolves it.
+- Follow the swift-concurrency skill's guidance for the fix.
+- Do not touch unrelated code, other findings, formatting or other files.
+- Do not silence the finding with \`// audit:ignore\`, and do not commit or push anything.
+- End with one line: FIXED: <what you changed>, or NOT FIXED: <why>.`
 
 const SEV_COLOR: Record<Severity, string> = {
   critical: 'error', high: 'warning', medium: 'suggestion', low: 'subtle',
@@ -82,20 +91,115 @@ function summaryCards({ Box, Text }: Elements, map: Record<string, Finding[]>) {
   )
 }
 
-// One compact row per finding; the why, the snippet and the fix live in the HTML report. The Pane and the band share it.
-function findingRows({ Box, Text }: Elements, files: [string, Finding[]][]) {
+const fixKey = (f: Finding) => `${f.file}#${f.id}#${f.line}`
+
+// What the Pane adds to each row: a Fix button whose label follows that finding's run.
+type FixRow = { Button: any; runs: Record<string, FixState>; onFix: (f: Finding) => void }
+
+function fixButton({ Button, runs, onFix }: FixRow, f: Finding) {
+  const run = runs[fixKey(f)]
+  const busy = Object.values(runs).some(r => r.status === 'running' && r.file === f.file)
+  if (run?.status === 'running') return <Button key={fixKey(f)} label="Fixing…" dimColor onPress={() => {}} />
+  if (busy) return <Button key={fixKey(f)} label="Wait" dimColor onPress={() => {}} />
+  return <Button key={fixKey(f)} label={run?.status === 'failed' ? 'Retry' : 'Fix'} onPress={() => onFix(f)} />
+}
+
+// One compact row per finding; the why, the snippet and the fix live in the HTML report. The Pane and the band share it;
+// only the Pane passes `fix`, which puts a Fix button beside each row.
+function findingRows({ Box, Text }: Elements, files: [string, Finding[]][], fix?: FixRow) {
   return files.map(([path, list]) => (
     <Box flexDirection="column" marginTop={1}>
       <Text weight="semibold" color={list.length ? 'text' : 'success'}>
         {list.length ? '' : '✓ '}{path.split('/').pop()}
       </Text>
-      {list.map(f => (
-        <Text wrap="truncate-end">
-          <Text color={SEV_COLOR[f.sev]} weight="bold">{f.sev.toUpperCase().padEnd(8)}</Text> {f.id}  line {f.line}  {f.title}
-        </Text>
-      ))}
+      {list.map(f => {
+        const row = (
+          <Text wrap="truncate-end">
+            <Text color={SEV_COLOR[f.sev]} weight="bold">{f.sev.toUpperCase().padEnd(8)}</Text> {f.id}  line {f.line}  {f.title}
+          </Text>
+        )
+        if (!fix) return row
+        const note = fix.runs[fixKey(f)]?.note
+        return (
+          <Box flexDirection="row" gap={1}>
+            <Box flexGrow={1} flexShrink={1}>{row}</Box>
+            {fixButton(fix, f)}
+            {note ? <Text dimColor wrap="truncate-end">{note}</Text> : null}
+          </Box>
+        )
+      })}
     </Box>
   ))
+}
+
+// The task one fixer agent gets: everything the auditor knows about the one finding.
+function fixPrompt(f: Finding): string {
+  return [
+    `Fix this one Swift concurrency finding and nothing else.`,
+    ``,
+    `ID: ${f.id}`,
+    `Severity: ${f.sev}`,
+    `File: ${f.file}`,
+    `Line: ${f.line}`,
+    `Finding: ${f.title}`,
+    `Why: ${f.why}`,
+    `Suggested fix: ${f.fix}`,
+    `Code at that line:`,
+    f.snippet,
+  ].join('\n')
+}
+
+// Spawns a fixer for one finding, one run per file at a time so two agents never edit the same file.
+async function startFix($: any, f: Finding): Promise<void> {
+  const key = fixKey(f)
+  const runs = await read($, fixes)
+  if (Object.values(runs).some(r => r.status === 'running' && r.file === f.file)) return
+  const count = ((await read($, byFile))[f.file] ?? []).filter(g => g.id === f.id).length
+  const base = { id: f.id, file: f.file, line: f.line, count }
+  await update($, fixes, m => ({ ...m, [key]: { ...base, status: 'running' as const } }))
+  let spawned: { agentId?: string; deny?: string }
+  try {
+    spawned = await $.agent.spawn({
+      subagentType: FIXER,
+      description: `Fix ${f.id} in ${f.file.split('/').pop()}:${f.line}`,
+      prompt: fixPrompt(f),
+    })
+  } catch (err) {
+    spawned = { deny: err instanceof Error ? err.message : String(err) }
+  }
+  const { agentId, deny } = spawned
+  const next: FixState = agentId && deny === undefined
+    ? { ...base, status: 'running', agentId }
+    : { ...base, status: 'failed', note: deny ?? 'the agent did not start' }
+  await update($, fixes, m => ({ ...m, [key]: next }))
+}
+
+// A fixer finished: re-audit its file, so "done" means the auditor no longer sees the finding, whatever the agent said.
+async function settleFix($: any, key: string, run: FixState, reason: string): Promise<void> {
+  let findings: Finding[] | undefined
+  try {
+    findings = audit(await $.fs.read(run.file), run.file)
+  } catch {
+    // An unreadable file leaves the findings as they were.
+  }
+  if (findings) {
+    await update($, byFile, map => ({ ...map, [run.file]: findings }))
+    const map = await read($, byFile)
+    $.ui.status(statusText(map))
+    try {
+      const { path: reportPath, url: reportUrl } = await writeReport($, map)
+      const state = await read($, band)
+      if (state.status === 'shown') await update($, band, (): Band => ({ ...state, reportPath, reportUrl }))
+    } catch {
+      // The report is a convenience: a failed write never fails the fix.
+    }
+  }
+  const left = findings?.filter(g => g.id === run.id).length ?? run.count
+  const fixed = reason === 'answer' && left < run.count
+  const note = fixed ? undefined : reason !== 'answer' ? `agent ended: ${reason}` : 'finding still reported'
+  await update($, fixes, m => ({ ...m, [key]: { ...run, status: fixed ? 'done' as const : 'failed' as const, agentId: undefined, note } }))
+  const name = run.file.split('/').pop()
+  $.ui.log(`${name}: ${run.id} ${fixed ? 'fixed' : `not fixed (${note})`}`)
 }
 
 export const register: Register = on => {
@@ -109,6 +213,29 @@ export const register: Register = on => {
       description: 'Run the concurrency auditor on a Swift file now',
       argumentHint: '<path/to/File.swift>',
     })
+    try {
+      await $.agent.register({
+        name: 'fixer',
+        description: 'Fixes one Swift concurrency finding reported by the auditor',
+        prompt: FIXER_PROMPT,
+        tools: ['Read', 'Edit', 'Grep', 'Glob'],
+        skills: ['swift-concurrency:swift-concurrency'],
+      })
+    } catch {
+      // Without the agent type a Fix press fails with the spawn's reason; the audit still works.
+    }
+    return next(e)
+  })
+
+  // The fixer runs only from the pane's Fix button, never on the model's own initiative.
+  on('agent.offer', { agent: FIXER }, () => ({ isOffered: false }))
+
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId !== undefined) {
+      const runs = await read($, fixes)
+      const hit = Object.entries(runs).find(([, r]) => r.status === 'running' && r.agentId === e.agentId)
+      if (hit) await settleFix($, hit[0], hit[1], e.reason)
+    }
     return next(e)
   })
 
@@ -198,8 +325,10 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
     const map = await read($, byFile)
+    const runs = await read($, fixes)
+    const finished = Object.values(runs).filter(r => r.status !== 'running')
     const files = Object.entries(map)
     if (!files.length) {
       return (
@@ -211,9 +340,19 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         {summaryCards({ Box, Text }, map)}
-        {findingRows({ Box, Text }, files)}
+        {findingRows({ Box, Text }, files, { Button, runs, onFix: f => void startFix($, f) })}
+        {finished.length ? (
+          <Box flexDirection="column" marginTop={1}>
+            <Text weight="semibold">Fix runs</Text>
+            {finished.map(r => (
+              <Text wrap="truncate-end">
+                <Text color={r.status === 'done' ? 'success' : 'error'}>{r.status === 'done' ? '✓' : '✗'}</Text> {r.id} {r.file.split('/').pop()}:{r.line} {r.status === 'done' ? 'fixed' : `failed · ${r.note}`}
+              </Text>
+            ))}
+          </Box>
+        ) : null}
         <Box marginTop={1}>
-          <Text dimColor>/concurrency-report writes the full HTML report · // audit:ignore CAxxx silences a line</Text>
+          <Text dimColor>Fix starts an agent for that one finding, nothing is committed · /concurrency-report writes the full HTML report · // audit:ignore CAxxx silences a line</Text>
         </Box>
       </Box>
     )
