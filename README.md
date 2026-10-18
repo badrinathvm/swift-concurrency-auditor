@@ -86,5 +86,3 @@ claude --plugin-dir ./swift-concurrency-auditor   # load from source, hot-reload
 claude plugin validate ./swift-concurrency-auditor
 claude plugin test ./swift-concurrency-auditor
 ```
-
-Tested with Claude Code 2.1.302.
