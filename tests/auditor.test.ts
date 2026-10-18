@@ -174,6 +174,27 @@ test('a Swift Write with findings writes the HTML report and shows the visual ba
   await ui.unmount()
 })
 
+test('/concurrency-report draws the summary cards inline in its output row', async ($, on) => {
+  on('ui.render', () => ENGINE_BAND)
+  on('fs.read', () => ({ value: LEAKY }))
+  on('fs.write', () => ({ value: undefined }) as never)
+  on('session.cwd', () => ({ value: '/app' }))
+  on('clock.now', () => ({ value: Date.UTC(2026, 9, 17, 22, 50) }))
+  await $.command.run(slash('concurrency-audit', '/app/FeedViewModel.swift'))
+  const report = await $.command.run(slash('concurrency-report'))
+
+  const ui = await $.ui.mount({
+    plugin: 'swift-concurrency-auditor',
+    surface: 'terminal',
+    component: 'CommandOutput',
+    props: { command: 'concurrency-report', args: '', text: report.text ?? '', isErrored: false } as never,
+  })
+  expect(await ui.find({ text: /Swift 6 readiness/ })).toBeDefined()
+  for (const label of ['Critical', 'High', 'Medium', 'Low']) expect(await ui.find({ text: label })).toBeDefined()
+  expect(await ui.find({ text: /Open full report/ })).toBeDefined()
+  await ui.unmount()
+})
+
 test('the band stays out of the way while a survey holds it', async ($, on) => {
   on('ui.render', () => ENGINE_BAND)
   on('fs.read', () => ({ value: LEAKY }))
