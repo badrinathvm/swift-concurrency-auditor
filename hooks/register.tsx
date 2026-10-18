@@ -1,13 +1,14 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { Finding, Severity } from '../types'
+import type { Band, Finding, Severity } from '../types'
 import { audit, counts, fingerprint, reminder } from './rules'
-import { buildReport } from './report'
+import { buildReport, readiness } from './report'
 
 const PANE = 'swift-concurrency'
 const REPORT_PATH = '.concurrency-audit/report.html'
 const byFile = atom({ plugin: 'swift-concurrency-auditor', key: 'byFile' } as const, {})
+const band = atom({ plugin: 'swift-concurrency-auditor', key: 'band' } as const, { status: 'hidden' } as Band)
 
 const SEV_COLOR: Record<Severity, string> = {
   critical: 'error', high: 'warning', medium: 'suggestion', low: 'subtle',
@@ -22,6 +23,27 @@ function statusText(map: Record<string, Finding[]>): string | undefined {
     c.low && `${c.low} low`,
   ].filter(Boolean)
   return parts.length ? `concurrency: ${parts.join(' · ')} (/concurrency)` : undefined
+}
+
+type Elements = { Box: any; Text: any }
+
+// One file heading, then a severity line and a dim fix line per finding. The Pane and the band share it.
+function findingRows({ Box, Text }: Elements, files: [string, Finding[]][]) {
+  return files.map(([path, list]) => (
+    <Box flexDirection="column" marginTop={1}>
+      <Text weight="semibold" color={list.length ? 'text' : 'success'}>
+        {list.length ? '' : '✓ '}{path.split('/').pop()}
+      </Text>
+      {list.map(f => (
+        <Box flexDirection="column">
+          <Text wrap="truncate-end">
+            <Text color={SEV_COLOR[f.sev]}>{f.sev.toUpperCase()}</Text> {f.id} line {f.line}: {f.title}
+          </Text>
+          <Text dimColor wrap="truncate-end">  fix: {f.fix}</Text>
+        </Box>
+      ))}
+    </Box>
+  ))
 }
 
 export const register: Register = on => {
@@ -92,7 +114,8 @@ export const register: Register = on => {
     const cwd = await $.session.cwd()
     const when = new Date(await $.clock.now()).toISOString().replace('T', ' ').slice(0, 16) + ' UTC'
     await $.fs.write(REPORT_PATH, buildReport(map, cwd, when))
-    return { text: `Concurrency report written to ${REPORT_PATH}` }
+    await update($, band, (): Band => ({ status: 'shown', source: 'report', reportPath: REPORT_PATH }))
+    return { text: `Concurrency findings shown above the prompt (also written to ${REPORT_PATH})` }
   })
 
   on('command.run', { command: 'concurrency-audit' }, async ($, e) => {
@@ -109,6 +132,7 @@ export const register: Register = on => {
     const findings = audit(text, abs)
     await update($, byFile, map => ({ ...map, [abs]: findings }))
     $.ui.status(statusText(await read($, byFile)))
+    await update($, band, (): Band => ({ status: 'shown', source: 'audit' }))
     // Claude reads command text too, so it can offer to fix what was found.
     return { text: findings.length ? reminder(abs, findings) : `${path}: no concurrency findings.` }
   })
@@ -130,23 +154,43 @@ export const register: Register = on => {
         <Text weight="bold">
           {files.length} file(s) · {c.critical} critical · {c.high} high · {c.medium} medium · {c.low} low
         </Text>
-        {files.map(([path, list]) => (
-          <Box flexDirection="column" marginTop={1}>
-            <Text weight="semibold" color={list.length ? 'text' : 'success'}>
-              {list.length ? '' : '✓ '}{path.split('/').pop()}
-            </Text>
-            {list.map(f => (
-              <Box flexDirection="column">
-                <Text>
-                  <Text color={SEV_COLOR[f.sev]}>{f.sev.toUpperCase()}</Text> {f.id} line {f.line}: {f.title}
-                </Text>
-                <Text dimColor>  fix: {f.fix}</Text>
-              </Box>
-            ))}
-          </Box>
-        ))}
+        {findingRows({ Box, Text }, files)}
         <Box marginTop={1}>
-          <Text dimColor>/concurrency-report writes the HTML dashboard · // audit:ignore CAxxx silences a line</Text>
+          <Text dimColor>/concurrency-report shows these above the prompt and writes the HTML dashboard · // audit:ignore CAxxx silences a line</Text>
+        </Box>
+      </Box>
+    )
+  })
+
+  // The inline view of the findings, drawn above the prompt the way /enhance draws its result.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey || e.props.isWorking) return next(e)
+    const state = await read($, band)
+    if (state.status === 'hidden') return next(e)
+
+    const { Box, Button, Text } = $.ui.resolve(e)
+    const files = Object.entries(await read($, byFile))
+    const all = files.flatMap(([, l]) => l)
+    const c = counts(all)
+    const lead = c.critical ? 'error' : c.high || c.medium ? 'warning' : 'success'
+    const dismiss = () => update($, band, (): Band => ({ status: 'hidden' }))
+
+    return (
+      <Box flexDirection="column">
+        {all.length ? (
+          <Text wrap="truncate-end">
+            <Text color={lead} weight="bold">🛡 Concurrency audit · Swift 6 readiness {readiness(all)}/100</Text>
+            <Text> · {files.length} file(s) · {c.critical} critical · {c.high} high · {c.medium} med · {c.low} low</Text>
+          </Text>
+        ) : (
+          <Text color="success">✓ No concurrency findings in {files.length} Swift file(s)</Text>
+        )}
+        {all.length ? findingRows({ Box, Text }, files.filter(([, l]) => l.length)) : null}
+        <Box marginTop={1}>
+          <Button key="pane" label="Open pane" onPress={() => $.ui.open({ id: PANE, title: 'Swift concurrency' })} />
+          <Text> </Text>
+          <Button key="dismiss" label="Dismiss" onPress={dismiss} />
+          {state.reportPath ? <Text dimColor> HTML: {state.reportPath}</Text> : null}
         </Box>
       </Box>
     )
